@@ -59,12 +59,50 @@ export const RemoteViewer: React.FC<RemoteViewerProps> = ({
   const [currentStroke, setCurrentStroke] = useState<AnnotationPoint[]>([]);
   const [videoFit, setVideoFit] = useState<'contain' | 'cover'>('contain');
 
-  // Bind media stream
+  const [isPausedByBrowser, setIsPausedByBrowser] = useState(false);
+
+  // Bind media stream with autoplay policy handling
   useEffect(() => {
-    if (videoRef.current && remoteStream) {
-      videoRef.current.srcObject = remoteStream;
-      videoRef.current.play().catch((e) => console.warn('Video play error:', e));
-    }
+    const video = videoRef.current;
+    if (!video || !remoteStream) return;
+
+    video.srcObject = remoteStream;
+
+    const playStream = async () => {
+      try {
+        await video.play();
+        setIsPausedByBrowser(false);
+      } catch (err: any) {
+        console.warn('Initial unmuted video play blocked by browser policy. Retrying muted:', err);
+        // Fallback: browser blocks unmuted autoplay without user interaction
+        video.muted = true;
+        setIsMuted(true);
+        try {
+          await video.play();
+          setIsPausedByBrowser(false);
+        } catch (muteErr) {
+          console.warn('Muted play also blocked, user tap needed:', muteErr);
+          setIsPausedByBrowser(true);
+        }
+      }
+    };
+
+    playStream();
+
+    remoteStream.onaddtrack = () => {
+      console.log('[RemoteViewer] Track added to remote stream, playing...');
+      playStream();
+    };
+
+    video.onpause = () => {
+      if (video.currentTime === 0 || video.paused) {
+        setIsPausedByBrowser(true);
+      }
+    };
+
+    video.onplaying = () => {
+      setIsPausedByBrowser(false);
+    };
   }, [remoteStream]);
 
   // Fullscreen change listener
@@ -304,6 +342,41 @@ export const RemoteViewer: React.FC<RemoteViewerProps> = ({
             videoFit === 'contain' ? 'object-contain' : 'object-cover'
           }`}
         />
+
+        {/* Browser Autoplay Blocked Overlay */}
+        {isPausedByBrowser && (
+          <div className="absolute inset-0 z-30 flex flex-col items-center justify-center bg-black/75 backdrop-blur-xs gap-3">
+            <button
+              onClick={() => {
+                if (videoRef.current) {
+                  videoRef.current.muted = true;
+                  setIsMuted(true);
+                  videoRef.current.play().then(() => setIsPausedByBrowser(false));
+                }
+              }}
+              className="px-6 py-3 rounded-2xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-sm shadow-xl flex items-center gap-2 transform hover:scale-105 transition-all cursor-pointer"
+            >
+              <Tv className="w-5 h-5" />
+              <span>{lang === 'hi' ? 'स्क्रीन देखने के लिए यहाँ क्लिक करें' : 'Click to Play Remote Screen Feed'}</span>
+            </button>
+            <p className="text-xs text-slate-400">
+              {lang === 'hi' ? 'ब्राउज़र सुरक्षा नीति: वीडियो शुरू करने के लिए एक क्लिक आवश्यक है' : 'Browser autoplay policy requires a user click to start video stream'}
+            </p>
+          </div>
+        )}
+
+        {/* Connecting / Negotiating Stream Overlay */}
+        {(!remoteStream || remoteStream.getVideoTracks().length === 0) && (
+          <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-slate-950/90 text-slate-300 gap-3">
+            <div className="w-10 h-10 border-4 border-rose-500/20 border-t-rose-500 rounded-full animate-spin" />
+            <div className="text-sm font-bold text-white">
+              {lang === 'hi' ? 'रिमोट स्क्रीन स्ट्रीम प्राप्त हो रही है...' : 'Connecting to remote screen stream...'}
+            </div>
+            <p className="text-xs text-slate-400">
+              {lang === 'hi' ? 'होस्ट के स्क्रीन फ्रेम्स की प्रतीक्षा की जा रही है' : 'Waiting for host video track negotiation'}
+            </p>
+          </div>
+        )}
 
         {/* Overlay Drawing Canvas */}
         <canvas

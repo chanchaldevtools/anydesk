@@ -215,6 +215,11 @@ export class WebRTCManager {
         });
       }
 
+      // In Cloud P2P mode, also initiate direct media stream call via PeerServer
+      if (signalingService.getMode() === 'cloud-p2p') {
+        signalingService.callPeerMedia(this.targetDeskId, stream);
+      }
+
       return stream;
   }
 
@@ -223,7 +228,10 @@ export class WebRTCManager {
    */
   public prepareViewer(targetDeskId: string) {
     this.targetDeskId = targetDeskId;
-    this.createPeerConnection();
+    // Guard against destroying a connection that is already created or negotiating
+    if (!this.pc || this.pc.connectionState === 'closed' || this.pc.connectionState === 'failed') {
+      this.createPeerConnection();
+    }
   }
 
   private async handleIncomingSignal(data: { fromDeskId: string; signalData: any }) {
@@ -233,6 +241,16 @@ export class WebRTCManager {
       return;
     }
     this.targetDeskId = fromDeskId;
+
+    // Handle direct media stream received from PeerJS
+    if (signalData.type === 'peerjs-stream' && signalData.stream) {
+      console.log('[WebRTC Manager] Directly attached remote stream from Cloud P2P call!');
+      this.remoteStream = signalData.stream;
+      if (this.onRemoteStream) {
+        this.onRemoteStream(signalData.stream);
+      }
+      return;
+    }
 
     if (!this.pc) {
       this.createPeerConnection();

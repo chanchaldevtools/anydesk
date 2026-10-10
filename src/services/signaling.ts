@@ -153,6 +153,26 @@ export class SignalingService {
         this.setupPeerDataConnection(conn);
       });
 
+      // Handle direct media stream calls from opponent
+      this.peer.on('call', (mediaCall) => {
+        console.log('[PeerJS Cloud] Incoming screen stream media call!');
+        // Viewer answers the media call
+        mediaCall.answer();
+        mediaCall.on('stream', (remoteStream) => {
+          console.log('[PeerJS Cloud] Remote stream received successfully via peer.call!', remoteStream);
+          this.emit('signal', {
+            fromDeskId: mediaCall.peer.replace('desk-', ''),
+            signalData: {
+              type: 'peerjs-stream',
+              stream: remoteStream,
+            },
+          });
+        });
+        mediaCall.on('close', () => {
+          this.emit('session-ended', { fromDeskId: mediaCall.peer.replace('desk-', '') });
+        });
+      });
+
       this.peer.on('error', (err: any) => {
         console.warn('[Cloud P2P Signaling]', err.type || err);
         if (err.type === 'unavailable-id') {
@@ -180,6 +200,22 @@ export class SignalingService {
     }
   }
 
+  public callPeerMedia(targetDeskId: string, stream: MediaStream) {
+    if (!this.peer || this.peer.destroyed) return;
+    const cleanTargetId = targetDeskId.replace(/\s+/g, '');
+    const fullTargetId = `desk-${cleanTargetId}`;
+    try {
+      console.log('[PeerJS Cloud] Calling target desk with media stream:', fullTargetId);
+      const mediaCall = this.peer.call(fullTargetId, stream);
+      mediaCall.on('error', (err) => console.warn('[PeerJS Media Call Error]:', err));
+      mediaCall.on('close', () => {
+        this.emit('session-ended', { fromDeskId: cleanTargetId });
+      });
+    } catch (e) {
+      console.warn('Failed to initiate peer media call:', e);
+    }
+  }
+
   private setupPeerDataConnection(conn: DataConnection) {
     const remoteId = conn.peer.replace('desk-', '');
     this.peerConnections.set(remoteId, conn);
@@ -193,14 +229,20 @@ export class SignalingService {
     });
   }
 
-  private ensurePeerConnection(targetDeskId: string): Promise<DataConnection> {
-    return new Promise((resolve, reject) => {
-      const cleanTargetId = targetDeskId.replace(/\s+/g, '');
-      const existing = this.peerConnections.get(cleanTargetId);
-      if (existing && existing.open) {
-        return resolve(existing);
-      }
+  private pendingConnections: Map<string, Promise<DataConnection>> = new Map();
 
+  private ensurePeerConnection(targetDeskId: string): Promise<DataConnection> {
+    const cleanTargetId = targetDeskId.replace(/\s+/g, '');
+    const existing = this.peerConnections.get(cleanTargetId);
+    if (existing && existing.open) {
+      return Promise.resolve(existing);
+    }
+
+    if (this.pendingConnections.has(cleanTargetId)) {
+      return this.pendingConnections.get(cleanTargetId)!;
+    }
+
+    const promise = new Promise<DataConnection>((resolve, reject) => {
       if (!this.peer || this.peer.destroyed) {
         return reject(new Error('PeerJS not initialized'));
       }
@@ -209,20 +251,26 @@ export class SignalingService {
       const conn = this.peer.connect(fullPeerId, { reliable: true });
 
       conn.on('open', () => {
+        this.pendingConnections.delete(cleanTargetId);
         this.setupPeerDataConnection(conn);
         resolve(conn);
       });
 
       conn.on('error', (err) => {
+        this.pendingConnections.delete(cleanTargetId);
         reject(err);
       });
 
       setTimeout(() => {
         if (!conn.open) {
+          this.pendingConnections.delete(cleanTargetId);
           reject(new Error('Connection timed out to Desk ' + targetDeskId));
         }
       }, 8000);
     });
+
+    this.pendingConnections.set(cleanTargetId, promise);
+    return promise;
   }
 
   // -------------------------------------------------------------
