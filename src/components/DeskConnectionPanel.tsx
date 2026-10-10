@@ -28,6 +28,7 @@ interface DeskConnectionPanelProps {
   includeAudio: boolean;
   onToggleAudio: (val: boolean) => void;
   statusMessage: string | null;
+  onSwitchToCloudP2P?: () => void;
 }
 
 export const DeskConnectionPanel: React.FC<DeskConnectionPanelProps> = ({
@@ -42,6 +43,7 @@ export const DeskConnectionPanel: React.FC<DeskConnectionPanelProps> = ({
   includeAudio,
   onToggleAudio,
   statusMessage,
+  onSwitchToCloudP2P,
 }) => {
   const [remoteInput, setRemoteInput] = useState('');
   const [copiedId, setCopiedId] = useState(false);
@@ -333,9 +335,28 @@ export const DeskConnectionPanel: React.FC<DeskConnectionPanelProps> = ({
 
           {/* Status feedback message */}
           {statusMessage && (
-            <div className="mt-4 p-2.5 rounded-lg bg-rose-500/10 border border-rose-500/20 text-xs text-rose-300 flex items-center gap-2">
-              <AlertCircle className="w-4 h-4 flex-shrink-0" />
-              <span>{statusMessage}</span>
+            <div className="mt-4 p-3 rounded-xl bg-rose-500/10 border border-rose-500/20 text-xs text-rose-300 space-y-2">
+              <div className="flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                <span className="leading-relaxed">{statusMessage}</span>
+              </div>
+              {(statusMessage.includes('client events') ||
+                statusMessage.includes('Pusher') ||
+                statusMessage.includes('Settings page')) &&
+                onSwitchToCloudP2P && (
+                  <button
+                    type="button"
+                    onClick={onSwitchToCloudP2P}
+                    className="w-full py-2 px-3 rounded-lg bg-teal-600 hover:bg-teal-500 text-white font-bold text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer shadow"
+                  >
+                    <Sparkles className="w-3.5 h-3.5" />
+                    <span>
+                      {lang === 'hi'
+                        ? 'Cloud P2P पर स्विच करें (बिना किसी सेटिंग के तुरंत चालू)'
+                        : 'Switch to Cloud P2P Mode (Instant Zero-Setup Connection)'}
+                    </span>
+                  </button>
+                )}
             </div>
           )}
         </div>

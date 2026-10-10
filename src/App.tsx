@@ -425,6 +425,7 @@ export default function App() {
             includeAudio={includeAudio}
             onToggleAudio={setIncludeAudio}
             statusMessage={statusMessage}
+            onSwitchToCloudP2P={() => handleSelectMode('cloud-p2p')}
           />
         )}
       </main>

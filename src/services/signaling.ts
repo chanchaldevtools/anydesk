@@ -308,10 +308,40 @@ export class SignalingService {
     }
 
     try {
-      this.pusherClient = new PusherClient(this.pusherConfig.key, {
+      const clientOptions: any = {
         cluster: this.pusherConfig.cluster,
         forceTLS: true,
-      });
+      };
+
+      // If secret is supplied in browser, authorize private channels directly via WebCrypto
+      if (this.pusherConfig.secret && typeof window !== 'undefined' && window.crypto?.subtle) {
+        clientOptions.authorizer = (channel: any) => ({
+          authorize: async (socketId: string, callback: (err: any, authData: any) => void) => {
+            try {
+              const enc = new TextEncoder();
+              const keyData = enc.encode(this.pusherConfig!.secret);
+              const msgData = enc.encode(`${socketId}:${channel.name}`);
+              const cryptoKey = await window.crypto.subtle.importKey(
+                'raw',
+                keyData,
+                { name: 'HMAC', hash: 'SHA-256' },
+                false,
+                ['sign']
+              );
+              const sig = await window.crypto.subtle.sign('HMAC', cryptoKey, msgData);
+              const hex = Array.from(new Uint8Array(sig))
+                .map((b) => b.toString(16).padStart(2, '0'))
+                .join('');
+              callback(null, { auth: `${this.pusherConfig!.key}:${hex}` });
+            } catch (err) {
+              console.warn('Browser Pusher channel authorization failed:', err);
+              callback(err, null);
+            }
+          },
+        });
+      }
+
+      this.pusherClient = new PusherClient(this.pusherConfig.key, clientOptions);
 
       this.pusherClient.connection.bind('connected', () => {
         this.isConnected = true;
@@ -325,29 +355,45 @@ export class SignalingService {
       });
 
       this.pusherClient.connection.bind('error', (err: any) => {
-        console.error('Pusher connection error:', err);
-        this.emit(
-          'error',
-          'Pusher error: ' + (err?.error?.data?.message || err?.message || 'Check credentials')
-        );
+        console.warn('Pusher connection error:', err);
+        const errMsg =
+          err?.data?.message || err?.error?.data?.message || err?.message || '';
+
+        if (errMsg.includes('client events') || errMsg.includes('Settings page')) {
+          this.emit(
+            'error',
+            'Pusher: To send client events, please enable "Enable client events" in Pusher Dashboard > App Settings, or switch to Cloud P2P mode.'
+          );
+        } else if (errMsg) {
+          this.emit('error', 'Pusher: ' + errMsg);
+        }
       });
 
-      const channelName = `desk-${this.currentDeskId.replace(/\s+/g, '')}`;
+      const cleanSelfId = this.currentDeskId.replace(/\s+/g, '');
+      const channelName = this.pusherConfig.secret
+        ? `private-desk-${cleanSelfId}`
+        : `desk-${cleanSelfId}`;
+
       this.pusherChannel = this.pusherClient.subscribe(channelName);
 
-      this.pusherChannel.bind('incoming-request', (data: IncomingRequest) => {
+      const bindEvent = (evt: string, cb: (data: any) => void) => {
+        this.pusherChannel.bind(evt, cb);
+        this.pusherChannel.bind(`client-${evt}`, cb);
+      };
+
+      bindEvent('incoming-request', (data: IncomingRequest) => {
         this.emit('incoming-connection-request', data);
       });
 
-      this.pusherChannel.bind('connection-response', (data: any) => {
+      bindEvent('connection-response', (data: any) => {
         this.emit('connection-response', data);
       });
 
-      this.pusherChannel.bind('signal', (data: any) => {
+      bindEvent('signal', (data: any) => {
         this.emit('signal', data);
       });
 
-      this.pusherChannel.bind('session-ended', (data: any) => {
+      bindEvent('session-ended', (data: any) => {
         this.emit('session-ended', data);
       });
     } catch (e: any) {
@@ -534,6 +580,17 @@ export class SignalingService {
 
   private async triggerPusherEvent(channel: string, event: string, data: any) {
     try {
+      // 1. Try Pusher direct client-event trigger if channel is active
+      if (this.pusherChannel && typeof this.pusherChannel.trigger === 'function') {
+        try {
+          const sent = this.pusherChannel.trigger(`client-${event}`, data);
+          if (sent) return;
+        } catch (e) {
+          // Client events might not be enabled on user's Pusher app, continue to fallback
+        }
+      }
+
+      // 2. Attempt backend endpoint with safe content-type verification
       const response = await fetch('/api/pusher/trigger', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -544,12 +601,24 @@ export class SignalingService {
           credentials: this.pusherConfig,
         }),
       });
+
       if (!response.ok) {
-        const err = await response.json();
-        console.warn('Pusher trigger failed:', err);
+        let errMsg = `HTTP ${response.status}`;
+        const contentType = response.headers.get('content-type') || '';
+        if (contentType.includes('application/json')) {
+          const err = await response.json().catch(() => null);
+          errMsg = err?.error || errMsg;
+        } else {
+          // Non-JSON response (e.g. Vercel 404 "The page could not be found")
+          const text = await response.text().catch(() => '');
+          if (text.includes('The page') || response.status === 404) {
+            errMsg = 'Serverless host has no backend /api route. Use Cloud P2P mode.';
+          }
+        }
+        console.warn('Pusher trigger:', errMsg);
       }
-    } catch (e) {
-      console.error('Pusher trigger fetch error:', e);
+    } catch (e: any) {
+      console.warn('Pusher trigger failed:', e?.message || e);
     }
   }
 

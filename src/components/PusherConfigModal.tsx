@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import PusherClient from 'pusher-js';
 import {
   X,
   Flame,
@@ -54,46 +55,62 @@ export const PusherConfigModal: React.FC<PusherConfigModalProps> = ({
     setIsTesting(true);
     setTestResult(null);
 
+    let testClient: PusherClient | null = null;
+    let timer: any = null;
+
     try {
-      const res = await fetch('/api/pusher/trigger', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          channel: 'test-channel',
-          event: 'test-ping',
-          data: { time: Date.now() },
-          credentials: {
-            appId,
-            key,
-            secret,
-            cluster,
-            enabled: true,
-          },
-        }),
+      testClient = new PusherClient(key, {
+        cluster,
+        forceTLS: true,
       });
 
-      const json = await res.json();
-      if (res.ok && json.success) {
+      const cleanup = () => {
+        if (timer) clearTimeout(timer);
+        if (testClient) {
+          testClient.disconnect();
+        }
+        setIsTesting(false);
+      };
+
+      timer = setTimeout(() => {
+        cleanup();
+        setTestResult({
+          success: false,
+          message:
+            lang === 'hi'
+              ? 'कनेक्शन टाइमआउट: कृपया Key और Cluster की जाँच करें.'
+              : 'Connection timeout: Please check Key and Cluster.',
+        });
+      }, 7000);
+
+      testClient.connection.bind('connected', () => {
+        cleanup();
         setTestResult({
           success: true,
           message:
             lang === 'hi'
-              ? 'पुशर कनेक्शन सफल! चैनल्स तैयार हैं.'
-              : 'Pusher connection successful! Channels ready.',
+              ? 'पुशर कनेक्शन सफल! चैनल्स सक्रिय हैं.'
+              : 'Pusher connection successful! Cloud channels ready.',
         });
-      } else {
+      });
+
+      testClient.connection.bind('error', (err: any) => {
+        cleanup();
+        const errMsg =
+          err?.error?.data?.message ||
+          err?.message ||
+          (lang === 'hi' ? 'अमान्य Key या Cluster' : 'Invalid Key or Cluster');
         setTestResult({
           success: false,
-          message: json.error || 'Connection failed',
+          message: errMsg,
         });
-      }
+      });
     } catch (e: any) {
+      setIsTesting(false);
       setTestResult({
         success: false,
-        message: e.message || 'Network error during test',
+        message: e.message || 'Pusher initialization error',
       });
-    } finally {
-      setIsTesting(false);
     }
   };
 
@@ -297,6 +314,40 @@ export const PusherConfigModal: React.FC<PusherConfigModalProps> = ({
                   placeholder="e.g. e4a7f..."
                   className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 text-xs text-white focus:border-purple-500 outline-none"
                 />
+              </div>
+            </div>
+
+            {/* Client Events Setup Instructions Box */}
+            <div className="p-3.5 rounded-xl bg-purple-500/10 border border-purple-500/30 text-xs text-purple-200 space-y-2">
+              <div className="font-bold flex items-center gap-1.5 text-purple-300">
+                <ShieldCheck className="w-4 h-4 text-purple-400 flex-shrink-0" />
+                <span>
+                  {lang === 'hi'
+                    ? 'Pusher Dashboard में Client Events कैसे चालू करें:'
+                    : 'How to Enable Client Events in Pusher Dashboard:'}
+                </span>
+              </div>
+              <ol className="list-decimal list-inside space-y-1 text-[11px] text-slate-300">
+                <li>
+                  {lang === 'hi'
+                    ? 'dashboard.pusher.com पर लॉगिन करें और अपना Channels App चुनें.'
+                    : 'Log in to dashboard.pusher.com and select your Channels App.'}
+                </li>
+                <li>
+                  {lang === 'hi'
+                    ? 'बाएं मेनू से App Settings पर क्लिक करें.'
+                    : 'Click "App Settings" in the left sidebar.'}
+                </li>
+                <li>
+                  {lang === 'hi'
+                    ? '"Enable client events" चेकबॉक्स को टिक करें और Save करें.'
+                    : 'Check the "Enable client events" box and click Save.'}
+                </li>
+              </ol>
+              <div className="p-2 rounded-lg bg-teal-500/10 border border-teal-500/20 text-[11px] text-teal-300 font-medium">
+                {lang === 'hi'
+                  ? '💡 सुझाव: यदि आप कोई सेटिंग नहीं बदलना चाहते, तो ऊपर "Cloud P2P" चुनें (यह 100% बिना किसी सेटअप के तुरंत चलता है).'
+                  : '💡 Tip: To connect with zero setup on Vercel, simply switch to "Cloud P2P" mode above.'}
               </div>
             </div>
 
