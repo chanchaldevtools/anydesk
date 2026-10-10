@@ -48,6 +48,46 @@ export const DeskConnectionPanel: React.FC<DeskConnectionPanelProps> = ({
   const [remoteInput, setRemoteInput] = useState('');
   const [copiedId, setCopiedId] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
+  const [testCaptureStatus, setTestCaptureStatus] = useState<string | null>(null);
+  const [isTestingCapture, setIsTestingCapture] = useState(false);
+
+  const handleTestDisplayCapture = async () => {
+    setIsTestingCapture(true);
+    setTestCaptureStatus(null);
+    try {
+      if (typeof window !== 'undefined' && !window.isSecureContext) {
+        throw new Error('Display capture requires HTTPS (secure context). Please open via https://.');
+      }
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
+        if (/Mobi|Android|iPhone|iPad/i.test(navigator.userAgent)) {
+          throw new Error('Screen capture is not supported on mobile browsers. Please open on a desktop computer.');
+        }
+        throw new Error('Your browser does not support getDisplayMedia.');
+      }
+
+      const stream = await navigator.mediaDevices.getDisplayMedia({
+        video: true,
+        audio: false,
+      });
+
+      // Stop tracks immediately after verifying
+      stream.getTracks().forEach((track) => track.stop());
+
+      setTestCaptureStatus('SUCCESS: Screen capture is fully supported and working in this browser!');
+    } catch (err: any) {
+      if (err.name === 'NotAllowedError') {
+        if (typeof window !== 'undefined' && window.self !== window.top) {
+          setTestCaptureStatus('BLOCKED BY IFRAME: Preview iframe blocked screen capture. Click "Full Tab" to open in dedicated window.');
+        } else {
+          setTestCaptureStatus('CANCELLED: You cancelled or dismissed the screen picker dialog.');
+        }
+      } else {
+        setTestCaptureStatus(`FAILED: ${err.message || 'Could not access display media'}`);
+      }
+    } finally {
+      setIsTestingCapture(false);
+    }
+  };
 
   const formattedSelfId = deskId
     ? deskId.replace(/(\d{3})(\d{3})(\d{3})/, '$1 $2 $3')
@@ -233,6 +273,51 @@ export const DeskConnectionPanel: React.FC<DeskConnectionPanelProps> = ({
                   : 'Start Direct Screen Sharing'}
               </span>
             </button>
+
+            {/* Diagnostic buttons */}
+            <div className="flex items-center gap-2 pt-1">
+              <button
+                type="button"
+                onClick={handleTestDisplayCapture}
+                disabled={isTestingCapture}
+                className="flex-1 py-2 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold border border-slate-700 flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+              >
+                <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                <span>
+                  {isTestingCapture
+                    ? lang === 'hi' ? 'परीक्षण हो रहा है...' : 'Testing Display...'
+                    : lang === 'hi' ? 'स्क्रीन कैप्चर टेस्ट करें' : 'Test Display Capture'}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => window.open(window.location.href, '_blank')}
+                className="py-2 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold border border-slate-700 flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                title="Open in dedicated tab to bypass iframe permissions restrictions"
+              >
+                <ExternalLink className="w-3.5 h-3.5 text-teal-400" />
+                <span>{lang === 'hi' ? 'नया टैब' : 'Full Tab'}</span>
+              </button>
+            </div>
+
+            {testCaptureStatus && (
+              <div
+                className={`p-2.5 rounded-xl text-xs flex items-start gap-2 ${
+                  testCaptureStatus.startsWith('SUCCESS')
+                    ? 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-300'
+                    : 'bg-rose-500/10 border border-rose-500/20 text-rose-300'
+                }`}
+              >
+                {testCaptureStatus.startsWith('SUCCESS') ? (
+                  <Check className="w-4 h-4 text-emerald-400 flex-shrink-0 mt-0.5" />
+                ) : (
+                  <AlertCircle className="w-4 h-4 text-rose-400 flex-shrink-0 mt-0.5" />
+                )}
+                <span className="leading-relaxed">{testCaptureStatus}</span>
+              </div>
+            )}
+
             <p className="text-[11px] text-center text-slate-400">
               {lang === 'hi'
                 ? 'या किसी अन्य यूजर द्वारा कनेक्शन रिक्वेस्ट भेजने की प्रतीक्षा करें'

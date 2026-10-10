@@ -249,19 +249,14 @@ export default function App() {
       signalingService.respondToConnection(requesterId, true);
       sounds.playConnected();
     } catch (err: any) {
-      console.warn('Screen selection cancelled or failed:', err);
+      const errorMsg = err?.message || 'Display capture was cancelled or failed.';
+      console.warn('Screen selection error:', err);
       signalingService.respondToConnection(
         requesterId,
         false,
-        lang === 'hi'
-          ? 'होस्ट ने स्क्रीन शेयरिंग कैंसिल कर दी'
-          : 'Host cancelled screen capture dialog'
+        errorMsg
       );
-      setStatusMessage(
-        lang === 'hi'
-          ? 'स्क्रीन चयन रद्द कर दिया गया'
-          : 'Screen selection dialog was cancelled'
-      );
+      setStatusMessage(errorMsg);
     }
   };
 
@@ -285,8 +280,9 @@ export default function App() {
       setSessionRole('sharer');
       setActivePartnerId('broadcast');
       sounds.playConnected();
-    } catch (err) {
-      console.warn('Direct share cancelled:', err);
+    } catch (err: any) {
+      console.warn('Direct share error:', err);
+      setStatusMessage(err?.message || 'Failed to start screen capture.');
     }
   };
 

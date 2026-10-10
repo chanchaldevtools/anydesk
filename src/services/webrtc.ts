@@ -113,32 +113,89 @@ export class WebRTCManager {
   public async startSharing(targetDeskId: string, options?: { audio?: boolean }): Promise<MediaStream> {
     this.targetDeskId = targetDeskId;
 
-    // Consent trigger: MUST be initiated right when the user accepts
+    // Check environment support
+    if (typeof window === 'undefined') {
+      throw new Error('Window environment not available.');
+    }
+
+    if (!window.isSecureContext) {
+      throw new Error('Display capture requires a secure context (HTTPS or localhost). Please open this app using https://.');
+    }
+
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
+      if (/Mobi|Android|iPhone|iPad/i.test(navigator.userAgent)) {
+        throw new Error('Screen capture is not supported on mobile browsers (iOS/Android). Please use a desktop browser (Chrome, Edge, Firefox, Brave) on a computer.');
+      }
+      throw new Error('Your browser does not support display capture. Please update or use Google Chrome, Edge, or Firefox on desktop.');
+    }
+
+    const isInIframe = window.self !== window.top;
+    let stream: MediaStream | null = null;
+
     try {
-      const stream = await navigator.mediaDevices.getDisplayMedia({
+      // Primary attempt: Framerate constraints + requested audio
+      stream = await navigator.mediaDevices.getDisplayMedia({
         video: {
-          displaySurface: 'monitor',
           frameRate: { ideal: 30, max: 60 },
         },
-        audio: options?.audio ?? true,
+        audio: Boolean(options?.audio),
       });
+    } catch (primaryErr: any) {
+      console.warn('Initial display capture failed, trying fallback:', primaryErr);
 
-      this.localStream = stream;
-      if (this.onLocalStream) {
-        this.onLocalStream(stream);
+      // If user cancelled, don't bother falling back
+      if (
+        primaryErr.name === 'NotAllowedError' &&
+        primaryErr.message &&
+        primaryErr.message.toLowerCase().includes('user')
+      ) {
+        throw new Error('Screen sharing cancelled: You closed or cancelled the browser screen selection dialog.');
       }
 
-      // Handle user stopping screen share via native browser floating banner
-      const videoTrack = stream.getVideoTracks()[0];
-      if (videoTrack) {
-        videoTrack.onended = () => {
-          this.close();
+      if (primaryErr.name === 'NotAllowedError' && (primaryErr.message?.includes('policy') || isInIframe)) {
+        throw new Error('Browser iframe policy blocked screen capture. Please click "Open in New Tab" to open in a dedicated window.');
+      }
+
+      // Secondary attempt: Basic video only without audio (fixes macOS/Linux whole screen audio capture errors)
+      try {
+        stream = await navigator.mediaDevices.getDisplayMedia({
+          video: true,
+          audio: false,
+        });
+      } catch (fallbackErr: any) {
+        console.error('Display capture fallback also failed:', fallbackErr);
+        if (fallbackErr.name === 'NotAllowedError') {
+          if (isInIframe) {
+            throw new Error('Iframe permissions policy denied display capture. Please open the app directly in a full browser tab.');
+          }
+          throw new Error('Screen capture permission was not granted. Please select a screen, window, or tab when prompted.');
+        }
+        throw new Error(fallbackErr.message || 'Unable to start display capture.');
+      }
+    }
+
+    if (!stream) {
+      throw new Error('No display stream received.');
+    }
+
+    this.localStream = stream;
+    if (this.onLocalStream) {
+      this.onLocalStream(stream);
+    }
+
+    // Handle user stopping screen share via native browser floating banner
+    const videoTrack = stream.getVideoTracks()[0];
+    if (videoTrack) {
+      videoTrack.onended = () => {
+        this.close();
+        if (this.targetDeskId) {
           signalingService.endSession(this.targetDeskId);
-          if (this.onSessionEnded) this.onSessionEnded();
-        };
-      }
+        }
+        if (this.onSessionEnded) this.onSessionEnded();
+      };
+    }
 
-      this.createPeerConnection();
+    this.createPeerConnection();
 
       // Create local data channel
       if (this.pc) {
@@ -159,10 +216,6 @@ export class WebRTCManager {
       }
 
       return stream;
-    } catch (err: any) {
-      console.error('getDisplayMedia error or user cancelled:', err);
-      throw err;
-    }
   }
 
   /**
