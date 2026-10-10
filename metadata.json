@@ -1,0 +1,10 @@
+{
+  "name": "AnyDesk Web — Secure Remote Screen Viewer",
+  "description": "Consent-first remote screen viewing and live assistance application built with WebRTC and real-time signaling.",
+  "requestFramePermissions": [
+    "display-capture"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
