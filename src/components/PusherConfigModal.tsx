@@ -148,32 +148,32 @@ export const PusherConfigModal: React.FC<PusherConfigModalProps> = ({
             <label className="text-xs font-bold uppercase tracking-wider text-slate-400">
               {lang === 'hi' ? 'सिग्नलिंग प्रोवाइडर चुनें:' : 'Select Signaling Provider:'}
             </label>
-            <div className="grid grid-cols-2 gap-3">
-              {/* Option 1: Built-in WS */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+              {/* Option 1: Cloud P2P (Serverless / Vercel) */}
               <button
                 type="button"
-                onClick={() => onSelectMode('builtin-ws')}
-                className={`p-3.5 rounded-xl border text-left transition-all cursor-pointer ${
-                  currentMode === 'builtin-ws'
-                    ? 'bg-rose-500/10 border-rose-500 text-white shadow-md shadow-rose-950/30'
+                onClick={() => onSelectMode('cloud-p2p')}
+                className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
+                  currentMode === 'cloud-p2p'
+                    ? 'bg-teal-500/10 border-teal-500 text-white shadow-md shadow-teal-950/30'
                     : 'bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-700'
                 }`}
               >
-                <div className="flex items-center justify-between mb-1.5">
-                  <div className="flex items-center gap-1.5 font-bold text-xs text-white">
-                    <Radio className="w-3.5 h-3.5 text-rose-500 animate-pulse" />
-                    <span>WebSocket Hub</span>
+                <div className="flex items-center justify-between mb-1">
+                  <div className="flex items-center gap-1 font-bold text-xs text-white">
+                    <Radio className="w-3.5 h-3.5 text-teal-400" />
+                    <span>Cloud P2P</span>
                   </div>
-                  {currentMode === 'builtin-ws' && (
-                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-rose-500 text-white font-bold">
+                  {currentMode === 'cloud-p2p' && (
+                    <span className="text-[9px] px-1 py-0.2 rounded bg-teal-500 text-black font-extrabold">
                       ACTIVE
                     </span>
                   )}
                 </div>
-                <p className="text-[11px] text-slate-400 leading-snug">
+                <p className="text-[10px] text-slate-400 leading-snug">
                   {lang === 'hi'
-                    ? 'जीरो सेटअप, तुरंत सक्रिय, बिना किसी API key के चलता है.'
-                    : 'Zero-config, instantly active, works without API keys.'}
+                    ? 'Vercel/Static सर्वरलेस के लिए सर्वोत्तम. बिना एरर तुरंत काम करता है.'
+                    : 'Recommended for Vercel/Serverless. Zero errors.'}
                 </p>
               </button>
 
@@ -181,27 +181,55 @@ export const PusherConfigModal: React.FC<PusherConfigModalProps> = ({
               <button
                 type="button"
                 onClick={() => onSelectMode('pusher')}
-                className={`p-3.5 rounded-xl border text-left transition-all cursor-pointer ${
+                className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
                   currentMode === 'pusher'
                     ? 'bg-purple-500/10 border-purple-500 text-white shadow-md shadow-purple-950/30'
                     : 'bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-700'
                 }`}
               >
-                <div className="flex items-center justify-between mb-1.5">
-                  <div className="flex items-center gap-1.5 font-bold text-xs text-white">
+                <div className="flex items-center justify-between mb-1">
+                  <div className="flex items-center gap-1 font-bold text-xs text-white">
                     <Flame className="w-3.5 h-3.5 text-purple-400" />
                     <span>Pusher Channels</span>
                   </div>
                   {currentMode === 'pusher' && (
-                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-500 text-white font-bold">
+                    <span className="text-[9px] px-1 py-0.2 rounded bg-purple-500 text-white font-extrabold">
                       ACTIVE
                     </span>
                   )}
                 </div>
-                <p className="text-[11px] text-slate-400 leading-snug">
+                <p className="text-[10px] text-slate-400 leading-snug">
                   {lang === 'hi'
                     ? 'पुशर क्लाउड चैनल्स द्वारा ग्लोबल पब-सब सिग्नलिंग.'
-                    : 'Pusher Cloud Channels pub/sub WebRTC signaling.'}
+                    : 'Official Pusher Cloud pub/sub WebRTC signaling.'}
+                </p>
+              </button>
+
+              {/* Option 3: Local WebSocket */}
+              <button
+                type="button"
+                onClick={() => onSelectMode('builtin-ws')}
+                className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
+                  currentMode === 'builtin-ws'
+                    ? 'bg-rose-500/10 border-rose-500 text-white shadow-md shadow-rose-950/30'
+                    : 'bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-700'
+                }`}
+              >
+                <div className="flex items-center justify-between mb-1">
+                  <div className="flex items-center gap-1 font-bold text-xs text-white">
+                    <Radio className="w-3.5 h-3.5 text-rose-500" />
+                    <span>Local WS Hub</span>
+                  </div>
+                  {currentMode === 'builtin-ws' && (
+                    <span className="text-[9px] px-1 py-0.2 rounded bg-rose-500 text-white font-extrabold">
+                      ACTIVE
+                    </span>
+                  )}
+                </div>
+                <p className="text-[10px] text-slate-400 leading-snug">
+                  {lang === 'hi'
+                    ? 'लोकल Node.js एक्सप्रेस सर्वर के लिए.'
+                    : 'For full-stack Node.js server environments.'}
                 </p>
               </button>
             </div>

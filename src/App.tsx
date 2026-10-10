@@ -39,7 +39,7 @@ export default function App() {
 
   const [lang, setLang] = useState<'en' | 'hi'>('hi');
   const [isSignalingConnected, setIsSignalingConnected] = useState(false);
-  const [connectionMode, setConnectionMode] = useState<ConnectionMode>('builtin-ws');
+  const [connectionMode, setConnectionMode] = useState<ConnectionMode>(() => signalingService.getMode());
   const [onlineDesks, setOnlineDesks] = useState<DeskInfo[]>([]);
 
   // Session State

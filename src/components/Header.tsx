@@ -94,6 +94,11 @@ export const Header: React.FC<HeaderProps> = ({
                 <Flame className="w-3.5 h-3.5 text-purple-400" />
                 <span>Pusher Channels</span>
               </>
+            ) : connectionMode === 'cloud-p2p' ? (
+              <>
+                <Radio className="w-3.5 h-3.5 text-teal-400 animate-pulse" />
+                <span>Cloud WebRTC (Vercel Ready)</span>
+              </>
             ) : (
               <>
                 <Radio className="w-3.5 h-3.5 text-rose-400 animate-pulse" />

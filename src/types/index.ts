@@ -1,4 +1,4 @@
-export type ConnectionMode = 'builtin-ws' | 'pusher';
+export type ConnectionMode = 'builtin-ws' | 'pusher' | 'cloud-p2p';
 
 export type SessionRole = 'idle' | 'sharer' | 'viewer';
 

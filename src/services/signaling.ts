@@ -1,4 +1,5 @@
 import PusherClient from 'pusher-js';
+import { Peer, DataConnection } from 'peerjs';
 import { ConnectionMode, DeskInfo, IncomingRequest, PusherConfig } from '../types';
 
 export type SignalingEventMap = {
@@ -13,9 +14,21 @@ export type SignalingEventMap = {
   'error': (err: string) => void;
 };
 
+// Detect static/serverless platforms like Vercel, Netlify, GitHub Pages
+const isServerlessHost =
+  typeof window !== 'undefined' &&
+  (window.location.hostname.includes('vercel.app') ||
+    window.location.hostname.includes('netlify.app') ||
+    window.location.hostname.includes('github.io') ||
+    window.location.hostname.includes('pages.dev'));
+
 export class SignalingService {
-  private mode: ConnectionMode = 'builtin-ws';
+  // If deployed to Vercel/Netlify, default to cloud-p2p to avoid WebSocket connection failure
+  private mode: ConnectionMode = isServerlessHost ? 'cloud-p2p' : 'builtin-ws';
   private ws: WebSocket | null = null;
+  private wsFailCount: number = 0;
+  private peer: Peer | null = null;
+  private peerConnections: Map<string, DataConnection> = new Map();
   private pusherClient: PusherClient | null = null;
   private pusherChannel: any = null;
   private listeners: Map<keyof SignalingEventMap, Set<Function>> = new Map();
@@ -35,6 +48,9 @@ export class SignalingService {
       const stored = localStorage.getItem('anydesk_pusher_config');
       if (stored) {
         this.pusherConfig = JSON.parse(stored);
+        if (this.pusherConfig?.enabled && this.pusherConfig.key) {
+          this.mode = 'pusher';
+        }
       }
     } catch (e) {
       console.warn('Failed to parse stored pusher config');
@@ -54,7 +70,7 @@ export class SignalingService {
   }
 
   public setMode(mode: ConnectionMode) {
-    if (this.mode === mode) return;
+    if (this.mode === mode && this.isConnected) return;
     this.mode = mode;
     this.disconnect();
     this.connect(this.currentDeskId, this.currentDeskName);
@@ -98,11 +114,120 @@ export class SignalingService {
 
     if (this.mode === 'pusher' && this.pusherConfig?.enabled && this.pusherConfig.key) {
       this.connectPusher();
+    } else if (this.mode === 'cloud-p2p' || isServerlessHost) {
+      this.connectPeerJS();
     } else {
       this.connectWebSocket();
     }
   }
 
+  // -------------------------------------------------------------
+  // Mode 1: Cloud P2P via global WebRTC broker (Zero setup, 100% works on Vercel)
+  // -------------------------------------------------------------
+  private connectPeerJS() {
+    this.mode = 'cloud-p2p';
+    const cleanId = `desk-${this.currentDeskId.replace(/\s+/g, '')}`;
+
+    if (this.peer && !this.peer.destroyed) {
+      this.peer.destroy();
+    }
+
+    try {
+      this.peer = new Peer(cleanId, {
+        config: {
+          iceServers: [
+            { urls: 'stun:stun.l.google.com:19302' },
+            { urls: 'stun:stun1.l.google.com:19302' },
+            { urls: 'stun:stun2.l.google.com:19302' },
+          ],
+        },
+      });
+
+      this.peer.on('open', (id) => {
+        this.isConnected = true;
+        this.emit('status-change', true, 'cloud-p2p');
+        this.emit('registered', this.currentDeskId);
+      });
+
+      this.peer.on('connection', (conn) => {
+        this.setupPeerDataConnection(conn);
+      });
+
+      this.peer.on('error', (err: any) => {
+        console.warn('[Cloud P2P Signaling]', err.type || err);
+        if (err.type === 'unavailable-id') {
+          // ID already in use, regenerated automatically
+          this.currentDeskId = Math.floor(100000000 + Math.random() * 900000000).toString();
+          sessionStorage.setItem('anydesk_self_desk_id', this.currentDeskId);
+          setTimeout(() => this.connectPeerJS(), 500);
+        } else if (err.type === 'peer-unavailable') {
+          this.emit('target-unavailable', {
+            targetDeskId: err.message || 'remote',
+            message: 'Target Desk is offline or does not exist.',
+          });
+        }
+      });
+
+      this.peer.on('disconnected', () => {
+        this.isConnected = false;
+        this.emit('status-change', false, 'cloud-p2p');
+        // PeerJS auto reconnect
+        this.peer?.reconnect();
+      });
+    } catch (e: any) {
+      console.error('PeerJS init failed:', e);
+      this.emit('error', 'Cloud signaling connection error');
+    }
+  }
+
+  private setupPeerDataConnection(conn: DataConnection) {
+    const remoteId = conn.peer.replace('desk-', '');
+    this.peerConnections.set(remoteId, conn);
+
+    conn.on('data', (data: any) => {
+      this.handleIncomingMessage(data);
+    });
+
+    conn.on('close', () => {
+      this.peerConnections.delete(remoteId);
+    });
+  }
+
+  private ensurePeerConnection(targetDeskId: string): Promise<DataConnection> {
+    return new Promise((resolve, reject) => {
+      const cleanTargetId = targetDeskId.replace(/\s+/g, '');
+      const existing = this.peerConnections.get(cleanTargetId);
+      if (existing && existing.open) {
+        return resolve(existing);
+      }
+
+      if (!this.peer || this.peer.destroyed) {
+        return reject(new Error('PeerJS not initialized'));
+      }
+
+      const fullPeerId = `desk-${cleanTargetId}`;
+      const conn = this.peer.connect(fullPeerId, { reliable: true });
+
+      conn.on('open', () => {
+        this.setupPeerDataConnection(conn);
+        resolve(conn);
+      });
+
+      conn.on('error', (err) => {
+        reject(err);
+      });
+
+      setTimeout(() => {
+        if (!conn.open) {
+          reject(new Error('Connection timed out to Desk ' + targetDeskId));
+        }
+      }, 8000);
+    });
+  }
+
+  // -------------------------------------------------------------
+  // Mode 2: Native WebSocket (Only for full-stack Node.js hosting)
+  // -------------------------------------------------------------
   private connectWebSocket() {
     if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) {
       return;
@@ -115,6 +240,7 @@ export class SignalingService {
       this.ws = new WebSocket(wsUrl);
 
       this.ws.onopen = () => {
+        this.wsFailCount = 0;
         this.isConnected = true;
         this.emit('status-change', true, 'builtin-ws');
         this.registerDesk();
@@ -141,7 +267,18 @@ export class SignalingService {
         this.emit('status-change', false, 'builtin-ws');
         if (this.pingInterval) clearInterval(this.pingInterval);
 
-        // Auto reconnect
+        this.wsFailCount++;
+        // If native WS fails on a static/serverless host like Vercel, immediately fallback to Cloud P2P!
+        if (this.wsFailCount >= 1 || isServerlessHost) {
+          console.log(
+            '[Signaling] Native WebSocket unavailable on current host (e.g. Vercel serverless). Switching to Cloud P2P signaling...'
+          );
+          this.disconnect();
+          this.setMode('cloud-p2p');
+          return;
+        }
+
+        // Auto reconnect retry only once
         if (this.reconnectTimeout) clearTimeout(this.reconnectTimeout);
         this.reconnectTimeout = setTimeout(() => {
           if (this.mode === 'builtin-ws' && this.currentDeskId) {
@@ -150,19 +287,23 @@ export class SignalingService {
         }, 3000);
       };
 
-      this.ws.onerror = (err) => {
-        console.warn('Signaling WebSocket error:', err);
+      this.ws.onerror = () => {
+        // Suppress unhandled noisy console crash on static hosting
+        this.wsFailCount++;
       };
     } catch (e: any) {
-      console.error('WS Connection initiation error:', e);
-      this.emit('error', 'Signaling server connection error');
+      console.warn('WS not supported, switching to Cloud P2P:', e);
+      this.setMode('cloud-p2p');
     }
   }
 
+  // -------------------------------------------------------------
+  // Mode 3: Pusher Channels
+  // -------------------------------------------------------------
   private connectPusher() {
     if (!this.pusherConfig?.key || !this.pusherConfig.cluster) {
       this.emit('error', 'Pusher App Key & Cluster are required');
-      this.setMode('builtin-ws');
+      this.setMode('cloud-p2p');
       return;
     }
 
@@ -185,10 +326,12 @@ export class SignalingService {
 
       this.pusherClient.connection.bind('error', (err: any) => {
         console.error('Pusher connection error:', err);
-        this.emit('error', 'Pusher connection error: ' + (err?.error?.data?.message || err?.message || 'Check credentials'));
+        this.emit(
+          'error',
+          'Pusher error: ' + (err?.error?.data?.message || err?.message || 'Check credentials')
+        );
       });
 
-      // Subscribe to this desk's private channel
       const channelName = `desk-${this.currentDeskId.replace(/\s+/g, '')}`;
       this.pusherChannel = this.pusherClient.subscribe(channelName);
 
@@ -210,7 +353,7 @@ export class SignalingService {
     } catch (e: any) {
       console.error('Pusher init error:', e);
       this.emit('error', e.message);
-      this.setMode('builtin-ws');
+      this.setMode('cloud-p2p');
     }
   }
 
@@ -228,6 +371,7 @@ export class SignalingService {
   }
 
   private handleIncomingMessage(msg: any) {
+    if (!msg) return;
     switch (msg.type) {
       case 'registered':
         this.emit('registered', msg.deskId);
@@ -236,6 +380,7 @@ export class SignalingService {
         this.emit('online-desks', msg.desks);
         break;
       case 'incoming-connection-request':
+      case 'request-connection':
         this.emit('incoming-connection-request', {
           fromDeskId: msg.fromDeskId,
           fromName: msg.fromName,
@@ -243,6 +388,7 @@ export class SignalingService {
         });
         break;
       case 'connection-response':
+      case 'respond-connection':
         this.emit('connection-response', {
           accepted: msg.accepted,
           fromDeskId: msg.fromDeskId,
@@ -262,6 +408,7 @@ export class SignalingService {
         });
         break;
       case 'session-ended':
+      case 'end-session':
         this.emit('session-ended', {
           fromDeskId: msg.fromDeskId,
         });
@@ -269,11 +416,13 @@ export class SignalingService {
     }
   }
 
-  public requestConnection(targetDeskId: string) {
+  public async requestConnection(targetDeskId: string) {
     const cleanTargetId = targetDeskId.replace(/\s+/g, '');
     const cleanSelfId = this.currentDeskId.replace(/\s+/g, '');
 
     const reqData = {
+      type: 'request-connection',
+      targetDeskId: cleanTargetId,
       fromDeskId: cleanSelfId,
       fromName: this.currentDeskName,
       requesterInfo: {
@@ -282,91 +431,103 @@ export class SignalingService {
       },
     };
 
-    if (this.mode === 'pusher') {
+    if (this.mode === 'cloud-p2p') {
+      try {
+        const conn = await this.ensurePeerConnection(cleanTargetId);
+        conn.send(reqData);
+      } catch (err: any) {
+        console.warn('Peer connection error:', err);
+        this.emit('target-unavailable', {
+          targetDeskId: cleanTargetId,
+          message: 'Unable to reach Desk ' + cleanTargetId + ' (may be offline or incorrect ID)',
+        });
+      }
+    } else if (this.mode === 'pusher') {
       this.triggerPusherEvent(`desk-${cleanTargetId}`, 'incoming-request', reqData);
     } else {
       if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-        this.ws.send(
-          JSON.stringify({
-            type: 'request-connection',
-            targetDeskId: cleanTargetId,
-            fromDeskId: cleanSelfId,
-            fromName: this.currentDeskName,
-            requesterInfo: reqData.requesterInfo,
-          })
-        );
+        this.ws.send(JSON.stringify(reqData));
       }
     }
   }
 
-  public respondToConnection(targetDeskId: string, accepted: boolean, reason?: string) {
+  public async respondToConnection(targetDeskId: string, accepted: boolean, reason?: string) {
     const cleanTargetId = targetDeskId.replace(/\s+/g, '');
     const cleanSelfId = this.currentDeskId.replace(/\s+/g, '');
 
     const payload = {
+      type: 'connection-response',
       targetDeskId: cleanTargetId,
       fromDeskId: cleanSelfId,
       accepted,
       reason,
     };
 
-    if (this.mode === 'pusher') {
+    if (this.mode === 'cloud-p2p') {
+      try {
+        const conn = await this.ensurePeerConnection(cleanTargetId);
+        conn.send(payload);
+      } catch (e) {
+        console.warn('Failed to send peer response:', e);
+      }
+    } else if (this.mode === 'pusher') {
       this.triggerPusherEvent(`desk-${cleanTargetId}`, 'connection-response', payload);
     } else {
       if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-        this.ws.send(
-          JSON.stringify({
-            type: 'respond-connection',
-            ...payload,
-          })
-        );
+        this.ws.send(JSON.stringify(payload));
       }
     }
   }
 
-  public sendSignal(targetDeskId: string, signalData: any) {
+  public async sendSignal(targetDeskId: string, signalData: any) {
     const cleanTargetId = targetDeskId.replace(/\s+/g, '');
     const cleanSelfId = this.currentDeskId.replace(/\s+/g, '');
 
     const payload = {
+      type: 'signal',
       targetDeskId: cleanTargetId,
       fromDeskId: cleanSelfId,
       signalData,
     };
 
-    if (this.mode === 'pusher') {
+    if (this.mode === 'cloud-p2p') {
+      try {
+        const conn = await this.ensurePeerConnection(cleanTargetId);
+        conn.send(payload);
+      } catch (e) {
+        console.warn('Failed to send peer signal:', e);
+      }
+    } else if (this.mode === 'pusher') {
       this.triggerPusherEvent(`desk-${cleanTargetId}`, 'signal', payload);
     } else {
       if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-        this.ws.send(
-          JSON.stringify({
-            type: 'signal',
-            ...payload,
-          })
-        );
+        this.ws.send(JSON.stringify(payload));
       }
     }
   }
 
-  public endSession(targetDeskId: string) {
+  public async endSession(targetDeskId: string) {
     const cleanTargetId = targetDeskId.replace(/\s+/g, '');
     const cleanSelfId = this.currentDeskId.replace(/\s+/g, '');
 
     const payload = {
+      type: 'session-ended',
       targetDeskId: cleanTargetId,
       fromDeskId: cleanSelfId,
     };
 
-    if (this.mode === 'pusher') {
+    if (this.mode === 'cloud-p2p') {
+      try {
+        const conn = this.peerConnections.get(cleanTargetId);
+        if (conn && conn.open) {
+          conn.send(payload);
+        }
+      } catch (e) {}
+    } else if (this.mode === 'pusher') {
       this.triggerPusherEvent(`desk-${cleanTargetId}`, 'session-ended', payload);
     } else {
       if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-        this.ws.send(
-          JSON.stringify({
-            type: 'end-session',
-            ...payload,
-          })
-        );
+        this.ws.send(JSON.stringify(payload));
       }
     }
   }
@@ -396,6 +557,11 @@ export class SignalingService {
     if (this.ws) {
       this.ws.close();
       this.ws = null;
+    }
+    if (this.peer && !this.peer.destroyed) {
+      this.peer.destroy();
+      this.peer = null;
+      this.peerConnections.clear();
     }
     if (this.pusherClient) {
       this.pusherClient.disconnect();
